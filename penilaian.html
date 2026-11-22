@@ -278,17 +278,24 @@
             tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-blue-500 font-bold"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Mengalkulasi data...</td></tr>`;
 
             try {
+                // Ambil seluruh kolom soal agar kunci_jawaban / kunci dan bobot_skor / bobot tidak terlewat
                 const { data: soalData } = await db.from('bank_soal')
-                    .select('id, jenis_soal, kunci_jawaban, bobot_skor')
+                    .select('*')
                     .eq('id_paket', currentIdPaket);
 
                 const listSoal = soalData || [];
                 const arrayIdSoal = listSoal.map(s => s.id);
 
                 const { data: logData, error: errLog } = await db.from('log_ujian')
-                    .select('id_siswa, id_peserta, nama_siswa, kelas, status')
+                    .select('*')
                     .eq('id_sesi', idSesi);
                 
+                // Ambil juga data dari peserta_ujian sebagai pemetaan cadangan id_siswa -> id_peserta
+                const { data: pesertaData } = await db.from('peserta_ujian')
+                    .select('*')
+                    .eq('id_sesi', idSesi);
+                const listPeserta = pesertaData || [];
+
                 const filterSelect = document.getElementById('filter-kelas');
                 filterSelect.innerHTML = `<option value="Semua">Semua Kelas</option>`;
 
@@ -306,7 +313,7 @@
                 });
                 document.getElementById('print-kelas-sesi').innerText = "Semua Kelas";
 
-                const siswaSelesai = logData.filter(s => s.status === 'selesai');
+                const siswaSelesai = logData.filter(s => String(s.status || '').toLowerCase() === 'selesai');
 
                 if (siswaSelesai.length === 0) {
                     tbody.innerHTML = `<tr><td colspan="7" class="py-10 text-center text-amber-500 italic">Peserta terdaftar, tetapi belum ada yang menyelesaikan ujian.</td></tr>`;
@@ -315,11 +322,13 @@
                 }
 
                 // 3. Ambil Jawaban peserta
-                const { data: semuaJawaban } = await db.from('jawaban_siswa')
-                    .select('*')
-                    .in('id_soal', arrayIdSoal);
-                
-                const listJawaban = semuaJawaban || [];
+                let listJawaban = [];
+                if (arrayIdSoal.length > 0) {
+                    const { data: semuaJawaban } = await db.from('jawaban_siswa')
+                        .select('*')
+                        .in('id_soal', arrayIdSoal);
+                    listJawaban = semuaJawaban || [];
+                }
                 dataRekapGlobal = [];
 
                 // 4. Kalkulasi Per Siswa
@@ -327,7 +336,15 @@
                     let skorPG = 0;
                     let skorEsai = 0;
                     
+                    // Cari record peserta_ujian yang cocok dengan id_siswa atau id_peserta
+                    const pesertaMatch = listPeserta.find(p => 
+                        String(p.id) === String(siswa.id_peserta) || 
+                        String(p.id_siswa) === String(siswa.id_siswa)
+                    );
+                    const idPesertaValid = siswa.id_peserta || (pesertaMatch ? pesertaMatch.id : siswa.id_siswa);
+
                     const jwbSiswaIni = listJawaban.filter(j => 
+                        String(j.id_peserta) === String(idPesertaValid) ||
                         String(j.id_peserta) === String(siswa.id_peserta) ||
                         String(j.id_peserta) === String(siswa.id_siswa) || 
                         String(j.id_siswa) === String(siswa.id_siswa)
@@ -337,17 +354,19 @@
                         const soalTerkait = listSoal.find(s => String(s.id) === String(jwb.id_soal));
                         if (soalTerkait) {
                             const jenis = (soalTerkait.tipe_soal || soalTerkait.tipe || soalTerkait.jenis_soal || "").toLowerCase();
-                            const isEsai = jenis.includes('esai') || jenis.includes('essay') || jenis.includes('uraian');
+                            const isEsai = jenis.includes('esai') || jenis.includes('essay') || jenis.includes('uraian') || jenis === '2';
                             
                             if (isEsai) {
                                 skorEsai += Number(jwb.skor_esai || 0);
                             } else {
-                                const kunciDB = (soalTerkait.kunci_jawaban || soalTerkait.kunci || "").trim().toUpperCase();
-                                const jawabSiswa = (jwb.jawaban_dipilih || jwb.pilihan || jwb.jawaban || jwb.opsi_pilih || "").trim().toUpperCase();
-                                const bobot = soalTerkait.bobot_skor || soalTerkait.bobot || 1;
+                                const kunciRaw = soalTerkait.kunci_jawaban ?? soalTerkait.kunci ?? soalTerkait.jawaban_benar ?? "";
+                                const jawabRaw = jwb.jawaban_dipilih ?? jwb.pilihan ?? jwb.jawaban ?? jwb.opsi_pilih ?? "";
+                                const kunciDB = String(kunciRaw).trim().toUpperCase();
+                                const jawabSiswa = String(jawabRaw).trim().toUpperCase();
+                                const bobot = Number(soalTerkait.bobot_skor ?? soalTerkait.bobot ?? soalTerkait.poin ?? 1);
 
                                 if (kunciDB !== "" && kunciDB === jawabSiswa) {
-                                    skorPG += Number(bobot);
+                                    skorPG += bobot;
                                 }
                             }
                         }
@@ -355,7 +374,7 @@
 
                     dataRekapGlobal.push({
                         id_siswa: siswa.id_siswa,
-                        id_peserta: siswa.id_peserta || siswa.id_siswa,
+                        id_peserta: idPesertaValid,
                         nama_siswa: siswa.nama_siswa,
                         kelas: siswa.kelas || "-",
                         skor_pg: skorPG,
@@ -419,7 +438,7 @@
             document.getElementById('modal-esai').classList.remove('hidden');
 
             const { data: soalData } = await db.from('bank_soal')
-                .select('id, pertanyaan, teks_pertanyaan, bobot_skor, jenis_soal, tipe_soal')
+                .select('*')
                 .eq('id_paket', currentIdPaket);
             
             const soalEsai = (soalData || []).filter(s => {
@@ -475,7 +494,7 @@
                 const idJawaban = jwb ? jwb.id : null;
                 const teksJwb = jwb ? (jwb.teks_esai || "- Siswa tidak mengisi jawaban esai -") : "- Belum ada data jawaban siswa -";
                 const skorSkrg = jwb ? (jwb.skor_esai || 0) : 0;
-                const bobotMaks = soal.bobot_skor || 10; 
+                const bobotMaks = soal.bobot_skor || soal.bobot || 10; 
 
                 if (idJawaban) {
                     dataEsaiAktif.push({ id_jawaban: idJawaban, element_id: `skor-esai-${idx}` });
@@ -495,7 +514,6 @@
                 `;
             }
 
-            // Trigger MathJax agar rumus LaTeX langsung ter-render menjadi simbol matematika biasa
             if (window.MathJax) {
                 MathJax.typeset();
             }

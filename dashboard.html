@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style> 
         body { font-family: 'Inter', sans-serif; } 
-        /* Transisi halus untuk Sidebar */
         .sidebar-transition { transition: all 0.3s ease-in-out; }
     </style>
 </head>
@@ -221,21 +220,38 @@
         // Fungsi Memuat Angka Statistik dari Database Supabase
         async function muatStatistikDashboard() {
             try {
-                // 1. Hitung Total Siswa
-                const { count: totalSiswa } = await db.from('siswa').select('*', { count: 'exact', head: true });
-                document.getElementById('stat-siswa').innerText = totalSiswa || 0;
+                // 1. Hitung Total Siswa dari tabel 'siswa'
+                const { count: totalSiswa, error: errSiswa } = await db
+                    .from('siswa')
+                    .select('*', { count: 'exact', head: true });
+                
+                if (errSiswa) console.error("Error hitung siswa:", errSiswa.message);
+                document.getElementById('stat-siswa').innerText = totalSiswa ?? 0;
 
-                // 2. Hitung Total Paket Soal / Bank Soal
-                const { count: totalSoal } = await db.from('bank_soal').select('*', { count: 'exact', head: true });
-                document.getElementById('stat-soal').innerText = totalSoal || 0;
+                // 2. Hitung Total Paket Soal dari tabel 'paket_soal'
+                const { count: totalPaket, error: errPaket } = await db
+                    .from('paket_soal')
+                    .select('*', { count: 'exact', head: true });
+
+                if (errPaket) console.error("Error hitung paket_soal:", errPaket.message);
+                document.getElementById('stat-soal').innerText = totalPaket ?? 0;
 
                 // 3. Hitung Sesi Ujian Aktif (Status 'aktif')
-                const { count: totalSesi } = await db.from('sesi_ujian').select('*', { count: 'exact', head: true }).eq('status', 'aktif');
-                document.getElementById('stat-sesi').innerText = totalSesi || 0;
+                const { count: totalSesi, error: errSesi } = await db
+                    .from('sesi_ujian')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('status', 'aktif');
+
+                if (errSesi) console.error("Error hitung sesi_ujian:", errSesi.message);
+                document.getElementById('stat-sesi').innerText = totalSesi ?? 0;
 
                 // 4. Hitung Total Jawaban / Tugas Esai Masuk
-                const { count: totalEsai } = await db.from('jawaban_siswa').select('*', { count: 'exact', head: true });
-                document.getElementById('stat-esai').innerText = totalEsai || 0;
+                const { count: totalEsai, error: errEsai } = await db
+                    .from('jawaban_siswa')
+                    .select('*', { count: 'exact', head: true });
+
+                if (errEsai) console.error("Error hitung jawaban_siswa:", errEsai.message);
+                document.getElementById('stat-esai').innerText = totalEsai ?? 0;
 
             } catch (err) {
                 console.error("Gagal memuat statistik:", err);
@@ -310,7 +326,7 @@
         function getWaktuWITA() {
             const sekarang = new Date();
             const utc = sekarang.getTime() + (sekarang.getTimezoneOffset() * 60000);
-            return new Date(utc + (3600000 * 8)); // WITA = UTC + 8
+            return new Date(utc + (3600000 * 8));
         }
 
         // Fungsi parser jam WITA untuk mengatasi format UTC/ISO dari database
@@ -348,7 +364,6 @@
                     return;
                 }
 
-                // Dapatkan jam WITA saat ini
                 const witaSekarang = getWaktuWITA();
                 const jamMenitSekarang = (witaSekarang.getHours() * 60) + witaSekarang.getMinutes();
 
@@ -357,7 +372,6 @@
                     const namaSesi = sesi.nama_sesi || sesi.nama_ujian || sesi.judul || 'Ujian CBT';
                     const tokenSesi = sesi.token || sesi.kode_token || '-';
 
-                    // Gunakan parser WITA yang akurat untuk jam mulai dan selesai
                     const mulaiInfo = parseJamWITA(sesi.waktu_mulai || sesi.jam_mulai);
                     const selesaiInfo = parseJamWITA(sesi.waktu_selesai || sesi.jam_selesai);
 
