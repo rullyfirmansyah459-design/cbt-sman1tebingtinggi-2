@@ -54,8 +54,8 @@
 
         async function muatProfilSiswaLobi() {
             const lbl = document.getElementById('lbl-peserta-lobi');
-            if (pending.nama_lengkap && pending.kelas) {
-                profilSiswaLobi = { nama_lengkap: pending.nama_lengkap, kelas: pending.kelas };
+            if (pending.id && pending.nama_lengkap && pending.kelas) {
+                profilSiswaLobi = { id: pending.id, nama_lengkap: pending.nama_lengkap, kelas: pending.kelas };
                 lbl.innerText = `${pending.nama_lengkap} • Kelas ${pending.kelas}`;
                 return;
             }
@@ -72,6 +72,12 @@
                     lbl.innerText = `${sRes.nama_lengkap} • Kelas ${sRes.kelas}`;
                     return;
                 }
+            }
+
+            if (pending.nama_lengkap && pending.kelas) {
+                profilSiswaLobi = { id: pending.id || null, nama_lengkap: pending.nama_lengkap, kelas: pending.kelas };
+                lbl.innerText = `${pending.nama_lengkap} • Kelas ${pending.kelas}`;
+                return;
             }
 
             lbl.innerText = `${pending.nisn || 'Peserta'}`;
@@ -102,12 +108,10 @@
             box.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-blue-400"></i><span>Memeriksa informasi mata pelajaran...</span>';
 
             timerCekToken = setTimeout(async () => {
-                // Pastikan profil siswa sudah termuat
                 if (!profilSiswaLobi && pending?.nisn) {
                     await muatProfilSiswaLobi();
                 }
 
-                // Cari langsung berdasarkan kolom 'token' di tabel sesi_ujian
                 const { data: sesiData, error: sesiErr } = await db
                     .from('sesi_ujian')
                     .select('id, nama_sesi, id_paket, target_kelas, kelas, durasi_menit, status')
@@ -182,13 +186,13 @@
                 .maybeSingle();
 
             let siswaData = profilSiswaLobi;
-            if (!siswaData && pending.nisn) {
+            if ((!siswaData || !siswaData.id) && pending.nisn) {
                 const { data: sRes } = await db
                     .from('siswa')
                     .select('id, nama_lengkap, kelas')
                     .eq('nisn', pending.nisn)
                     .maybeSingle();
-                siswaData = sRes;
+                if (sRes) siswaData = sRes;
             }
 
             if (sesiData && siswaData) {
@@ -200,25 +204,40 @@
                     return;
                 }
 
-                // Cek status terkunci / selesai
-                const { data: statusLama } = await db
-                    .from('peserta_ujian')
-                    .select('status_pengerjaan')
-                    .eq('id_sesi', sesiData.id)
-                    .eq('id_siswa', siswaData.id)
-                    .maybeSingle();
+                if (siswaData.id) {
+                    // Cek status diblokir / terkunci / selesai di peserta_ujian
+                    const { data: statusLama } = await db
+                        .from('peserta_ujian')
+                        .select('status_pengerjaan')
+                        .eq('id_sesi', sesiData.id)
+                        .eq('id_siswa', siswaData.id)
+                        .maybeSingle();
 
-                if (statusLama && statusLama.status_pengerjaan === 'terkunci') {
-                    alert('AKSES DITOLAK: Akun ujian Anda dalam status TERKUNCI karena pelanggaran/diblokir proktor.\n\nSilakan hubungi Proktor/Pengawas untuk menekan tombol "Izinkan Lanjut" terlebih dahulu.');
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>Masuk Ruang Ujian</span><i class="fa-solid fa-arrow-right"></i>';
-                    return;
-                }
-                if (statusLama && statusLama.status_pengerjaan === 'selesai') {
-                    alert('Anda sudah menyelesaikan ujian pada sesi ini dan tidak dapat masuk kembali.');
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>Masuk Ruang Ujian</span><i class="fa-solid fa-arrow-right"></i>';
-                    return;
+                    // Cek juga di log_ujian agar sinkron
+                    const { data: statusLogLama } = await db
+                        .from('log_ujian')
+                        .select('status')
+                        .eq('id_sesi', sesiData.id)
+                        .eq('id_siswa', siswaData.id)
+                        .order('waktu_mulai', { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+
+                    const stPeserta = String(statusLama?.status_pengerjaan || '').toLowerCase();
+                    const stLog = String(statusLogLama?.status || '').toLowerCase();
+
+                    if (['terkunci', 'diblokir'].includes(stPeserta) || ['terkunci', 'diblokir'].includes(stLog)) {
+                        alert('AKSES DITOLAK: Akun ujian Anda dalam status TERKUNCI / DIBLOKIR karena pelanggaran atau dikunci proktor.\n\nSilakan hubungi Proktor/Pengawas untuk menekan tombol "Lanjut" di halaman Monitoring terlebih dahulu.');
+                        btn.disabled = false;
+                        btn.innerHTML = '<span>Masuk Ruang Ujian</span><i class="fa-solid fa-arrow-right"></i>';
+                        return;
+                    }
+                    if (['selesai', 'terkirim', 'waktu_habis', 'dipaksa_selesai'].includes(stPeserta) || stLog === 'selesai') {
+                        alert('Anda sudah menyelesaikan ujian pada sesi ini dan tidak dapat masuk kembali.');
+                        btn.disabled = false;
+                        btn.innerHTML = '<span>Masuk Ruang Ujian</span><i class="fa-solid fa-arrow-right"></i>';
+                        return;
+                    }
                 }
             }
 
@@ -246,10 +265,11 @@
                     .eq('id', hasil.peserta_id)
                     .maybeSingle();
 
-                if (cekPeserta && ['terkunci', 'selesai'].includes(cekPeserta.status_pengerjaan)) {
+                const stCek = String(cekPeserta?.status_pengerjaan || '').toLowerCase();
+                if (['terkunci', 'diblokir', 'selesai', 'terkirim', 'waktu_habis', 'dipaksa_selesai'].includes(stCek)) {
                     alert(
-                        cekPeserta.status_pengerjaan === 'terkunci'
-                            ? 'AKSES DITOLAK: Akun ujian Anda masih dalam status TERKUNCI. Hubungi Proktor/Pengawas.'
+                        ['terkunci', 'diblokir'].includes(stCek)
+                            ? 'AKSES DITOLAK: Akun ujian Anda masih dalam status TERKUNCI / DIBLOKIR. Hubungi Proktor/Pengawas.'
                             : 'Anda sudah menyelesaikan ujian ini.'
                     );
                     btn.disabled = false;

@@ -195,7 +195,7 @@
                     <!-- Kotak Input Jawaban Esai -->
                     <div id="konten-esai" class="hidden space-y-2">
                         <label class="block text-xs font-bold text-gray-600 uppercase">Jawaban Uraian / Esai:</label>
-                        <textarea id="input-esai" dir="auto" rows="5" oninput="simpanJawabanEsai(this.value)" class="w-full bg-white border border-gray-300 rounded-xl p-4 text-sm text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 leading-relaxed select-text" placeholder="Ketik jawaban esai Anda di sini... (Otomatis tersimpan)"></textarea>
+                        <textarea id="input-esai" dir="auto" rows="5" oninput="simpanJawabanEsai(this.value)" onblur="paksaSimpanEsaiAktif()" class="w-full bg-white border border-gray-300 rounded-xl p-4 text-sm text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 leading-relaxed select-text" placeholder="Ketik jawaban esai Anda di sini... (Otomatis tersimpan)"></textarea>
                     </div>
                 </div>
 
@@ -243,6 +243,7 @@
         let jumlahPelanggaran = 0;
         let batasMaksPelanggaran = 3;
         let timerEsai = null;
+        let esaiBelumTersimpan = false;
         let ujianDitutup = false;
 
         let antiCheatAktif = false;
@@ -255,6 +256,16 @@
         // Helper deteksi karakter Arab (Unicode Arabic Block)
         function mengandungArab(teks) {
             return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(String(teks || ''));
+        }
+
+        // Helper deteksi tipe soal esai secara seragam
+        function cekSoalEsai(soal) {
+            if (!soal) return false;
+            const j1 = String(soal.tipe_soal || '').toLowerCase().trim();
+            const j2 = String(soal.tipe || '').toLowerCase().trim();
+            const j3 = String(soal.jenis_soal || '').toLowerCase().trim();
+            const gabungan = `${j1} ${j2} ${j3}`;
+            return gabungan.includes('esai') || gabungan.includes('essay') || gabungan.includes('uraian') || gabungan.includes('tertulis') || j1 === '2' || j2 === '2' || j3 === '2';
         }
 
         if (!sessionSiswa) {
@@ -335,10 +346,11 @@
                     .eq('id', dataSiswa.peserta_id)
                     .maybeSingle();
 
-                if (statusDb && ['terkunci', 'selesai'].includes(statusDb.status_pengerjaan)) {
+                const stAwal = String(statusDb?.status_pengerjaan || '').toLowerCase();
+                if (['terkunci', 'diblokir', 'selesai', 'terkirim', 'waktu_habis', 'dipaksa_selesai'].includes(stAwal)) {
                     alert(
-                        statusDb.status_pengerjaan === 'terkunci'
-                            ? 'AKSES DITOLAK: Akun Anda dalam status TERKUNCI. Hubungi Proktor/Pengawas untuk membuka blokir.'
+                        ['terkunci', 'diblokir'].includes(stAwal)
+                            ? 'AKSES DITOLAK: Akun Anda dalam status TERKUNCI / DIBLOKIR. Hubungi Proktor/Pengawas untuk membuka blokir.'
                             : 'Ujian Anda sudah berstatus SELESAI.'
                     );
                     localStorage.removeItem('siswaLogin');
@@ -358,7 +370,6 @@
             const cacheKey = `cache_soal_${idPaket}`;
             let data = null;
 
-            // Cek cache browser terlebih dahulu agar hemat bandwidth Supabase saat refresh
             const cachedSoal = sessionStorage.getItem(cacheKey);
             if (cachedSoal) {
                 try {
@@ -417,13 +428,14 @@
 
         async function simpanJawabanKeDB(index) {
             const soal = daftarSoal[index];
-            const jawaban = jawabanSiswa[index] || null;
+            if (!soal) return;
+
+            const jawaban = jawabanSiswa[index] !== undefined ? jawabanSiswa[index] : null;
             const isRagu = raguRagu[index] || false;
             
             let opsi = null;
             let esai = null;
-            const jenis = (soal.tipe_soal || soal.tipe || soal.jenis_soal || 'PG').toLowerCase();
-            if (jenis.includes('esai') || jenis.includes('uraian')) {
+            if (cekSoalEsai(soal)) {
                 esai = jawaban;
             } else {
                 opsi = jawaban;
@@ -434,22 +446,39 @@
             statusSimpan.classList.remove('hidden', 'text-emerald-600', 'text-red-600');
             statusSimpan.classList.add('text-amber-600');
 
-            const { data: existingData } = await db.from('jawaban_siswa')
-                .select('id').eq('id_peserta', dataSiswa.peserta_id).eq('id_soal', soal.id).maybeSingle();
+            // Gunakan upsert agar 100% bebas duplikat walaupun diklik cepat
+            const payload = {
+                id_peserta: dataSiswa.peserta_id,
+                id_soal: soal.id,
+                jawaban_dipilih: opsi,
+                teks_esai: esai,
+                ragu_ragu: isRagu,
+                updated_at: new Date().toISOString()
+            };
 
-            let err = null;
-            if (existingData) {
-                const { error } = await db.from('jawaban_siswa')
-                    .update({ jawaban_dipilih: opsi, teks_esai: esai, ragu_ragu: isRagu, updated_at: new Date().toISOString() })
-                    .eq('id', existingData.id);
-                err = error;
-            } else {
-                const { error } = await db.from('jawaban_siswa')
-                    .insert([{ id_peserta: dataSiswa.peserta_id, id_soal: soal.id, jawaban_dipilih: opsi, teks_esai: esai, ragu_ragu: isRagu }]);
-                err = error;
+            let { error: err } = await db
+                .from('jawaban_siswa')
+                .upsert(payload, { onConflict: 'id_peserta,id_soal' });
+
+            // Fallback jika database belum memasang constraint unique
+            if (err && err.code === '42P10') {
+                const { data: existingData } = await db.from('jawaban_siswa')
+                    .select('id').eq('id_peserta', dataSiswa.peserta_id).eq('id_soal', soal.id).limit(1).maybeSingle();
+
+                if (existingData) {
+                    const resUpd = await db.from('jawaban_siswa')
+                        .update({ jawaban_dipilih: opsi, teks_esai: esai, ragu_ragu: isRagu, updated_at: new Date().toISOString() })
+                        .eq('id', existingData.id);
+                    err = resUpd.error;
+                } else {
+                    const resIns = await db.from('jawaban_siswa')
+                        .insert([{ id_peserta: dataSiswa.peserta_id, id_soal: soal.id, jawaban_dipilih: opsi, teks_esai: esai, ragu_ragu: isRagu }]);
+                    err = resIns.error;
+                }
             }
 
             if (!err) {
+                esaiBelumTersimpan = false;
                 statusSimpan.innerHTML = '<i class="fa-solid fa-cloud-arrow-up mr-1"></i>Tersimpan';
                 statusSimpan.classList.replace('text-amber-600', 'text-emerald-600');
                 setTimeout(() => statusSimpan.classList.add('hidden'), 2000);
@@ -465,7 +494,7 @@
             grid.innerHTML = "";
             daftarSoal.forEach((_, i) => {
                 let statusClass = "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50";
-                if (jawabanSiswa[i] !== undefined && jawabanSiswa[i] !== "") statusClass = "bg-blue-600 text-white font-bold border border-blue-600";
+                if (jawabanSiswa[i] !== undefined && String(jawabanSiswa[i]).trim() !== "") statusClass = "bg-blue-600 text-white font-bold border border-blue-600";
                 if (raguRagu[i]) statusClass = "bg-amber-400 text-slate-900 font-bold border border-amber-500";
                 if (i === indexSoalAktif) statusClass += " ring-2 ring-blue-500 ring-offset-2 ring-offset-white";
 
@@ -499,11 +528,8 @@
 
             const opsiContainer = document.getElementById('konten-opsi');
             const esaiContainer = document.getElementById('konten-esai');
-            
-            const jenis = (soal.tipe_soal || soal.tipe || soal.jenis_soal || "").toLowerCase();
-            const isEsai = jenis.includes('esai') || jenis.includes('essay') || jenis.includes('uraian') || jenis.includes('tertulis');
 
-            if (isEsai) {
+            if (cekSoalEsai(soal)) {
                 opsiContainer.classList.add('hidden');
                 esaiContainer.classList.remove('hidden');
                 
@@ -534,7 +560,7 @@
                             : 'bg-white border-gray-300 text-gray-800 hover:bg-gray-50';
 
                         opsiContainer.innerHTML += `
-                            <label class="flex items-start p-3.5 rounded-xl border cursor-pointer transition-all ${bgActive}" onclick="pilihJawaban(${i}, '${huruf}')">
+                            <label class="flex items-start p-3.5 rounded-xl border cursor-pointer transition-all ${bgActive}" onclick="pilihJawaban(event, ${i}, '${huruf}')">
                                 <div class="flex items-center shrink-0 pt-0.5 mr-3">
                                     <input type="radio" name="opsi_pilihan" value="${huruf}" ${isChecked} class="mr-2.5 text-blue-600 focus:ring-blue-500">
                                     <span class="font-bold text-sm">${huruf}.</span>
@@ -555,7 +581,8 @@
             renderNavigasiSoal();
         }
         
-        function pilihJawaban(i, huruf) {
+        function pilihJawaban(event, i, huruf) {
+            if (event) event.preventDefault();
             jawabanSiswa[i] = huruf;
             tampilkanSoal(i);
             simpanJawabanKeDB(i);
@@ -563,6 +590,7 @@
 
         function simpanJawabanEsai(teks) {
             jawabanSiswa[indexSoalAktif] = teks;
+            esaiBelumTersimpan = true;
             const inputEsai = document.getElementById('input-esai');
             if (inputEsai) {
                 inputEsai.classList.toggle('teks-arab', mengandungArab(teks));
@@ -570,9 +598,17 @@
             renderNavigasiSoal();
             
             clearTimeout(timerEsai);
+            const idxTarget = indexSoalAktif;
             timerEsai = setTimeout(() => {
-                simpanJawabanKeDB(indexSoalAktif);
-            }, 1200); 
+                simpanJawabanKeDB(idxTarget);
+            }, 800); 
+        }
+
+        async function paksaSimpanEsaiAktif() {
+            if (esaiBelumTersimpan && cekSoalEsai(daftarSoal[indexSoalAktif])) {
+                clearTimeout(timerEsai);
+                await simpanJawabanKeDB(indexSoalAktif);
+            }
         }
 
         function tandaiRagu() {
@@ -581,9 +617,22 @@
             simpanJawabanKeDB(indexSoalAktif);
         }
 
-        function pindahSoal(i) { tampilkanSoal(i); }
-        function soalSebelumnya() { if (indexSoalAktif > 0) tampilkanSoal(indexSoalAktif - 1); }
-        function soalBerikutnya() { if (indexSoalAktif < daftarSoal.length - 1) tampilkanSoal(indexSoalAktif + 1); }
+        async function pindahSoal(i) {
+            await paksaSimpanEsaiAktif();
+            tampilkanSoal(i);
+        }
+        async function soalSebelumnya() {
+            if (indexSoalAktif > 0) {
+                await paksaSimpanEsaiAktif();
+                tampilkanSoal(indexSoalAktif - 1);
+            }
+        }
+        async function soalBerikutnya() {
+            if (indexSoalAktif < daftarSoal.length - 1) {
+                await paksaSimpanEsaiAktif();
+                tampilkanSoal(indexSoalAktif + 1);
+            }
+        }
 
         function mulaiTimerUjian(durasiMenit, batasWaktu) {
             let totalDetik = batasWaktu
@@ -731,8 +780,7 @@
             }]);
 
             if (jumlahPelanggaran >= batasMaksPelanggaran) {
-                alert("Batas pelanggaran maksimal tercapai. Ujian Anda dihentikan.");
-                kumpulUjianFinal('diblokir');
+                await kumpulUjianFinal('diblokir');
             } else {
                 setTimeout(() => {
                     warningBox.classList.add('opacity-0');
@@ -741,7 +789,8 @@
             }
         }
 
-        function konfirmasiSelesaiUjian() {
+        async function konfirmasiSelesaiUjian() {
+            await paksaSimpanEsaiAktif();
             if (confirm("Yakin ingin mengumpulkan seluruh jawaban?\nKlik OK jika sudah selesai.")) {
                 if (confirm("Centang/Setujui form ini sebagai tanda tangan digital Anda untuk mengunci jawaban.")) {
                     kumpulUjianFinal('terkirim');
@@ -751,11 +800,23 @@
 
         async function kumpulUjianFinal(alasan = 'terkirim') {
             if (ujianDitutup) return;
+            await paksaSimpanEsaiAktif();
             ujianDitutup = true;
             antiCheatAktif = false;
+
+            const statusLogFinal = (alasan === 'diblokir') ? 'diblokir' : 'selesai';
+
             if (dataSiswa && dataSiswa.log_id) {
-                await db.from('log_ujian').update({ status: alasan === 'diblokir' ? 'diblokir' : 'selesai' }).eq('id', dataSiswa.log_id);
+                await db.from('log_ujian')
+                    .update({ status: statusLogFinal })
+                    .eq('id', dataSiswa.log_id);
+            } else if (dataSiswa && dataSiswa.id && dataSiswa.id_sesi) {
+                await db.from('log_ujian')
+                    .update({ status: statusLogFinal })
+                    .eq('id_siswa', dataSiswa.id)
+                    .eq('id_sesi', dataSiswa.id_sesi);
             }
+
             if (dataSiswa && dataSiswa.peserta_id) {
                 await db.from('peserta_ujian').update({
                     status_pengerjaan: alasan,
@@ -763,9 +824,25 @@
                     finished_reason: alasan,
                     last_activity_at: new Date().toISOString()
                 }).eq('id', dataSiswa.peserta_id);
+            } else if (dataSiswa && dataSiswa.id && dataSiswa.id_sesi) {
+                await db.from('peserta_ujian').update({
+                    status_pengerjaan: alasan,
+                    submitted_at: new Date().toISOString(),
+                    finished_reason: alasan,
+                    last_activity_at: new Date().toISOString()
+                }).eq('id_siswa', dataSiswa.id).eq('id_sesi', dataSiswa.id_sesi);
             }
+
             if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
-            alert(alasan === 'waktu_habis' ? "Waktu ujian habis. Jawaban telah dikumpulkan." : "Ujian berhasil diselesaikan!");
+
+            if (alasan === 'diblokir') {
+                alert("Batas pelanggaran maksimal tercapai. Ujian Anda dihentikan dan akun dikunci. Hubungi Proktor/Pengawas.");
+            } else if (alasan === 'waktu_habis') {
+                alert("Waktu ujian habis. Jawaban telah dikumpulkan.");
+            } else {
+                alert("Ujian berhasil diselesaikan!");
+            }
+
             if (dataSiswa && dataSiswa.id_paket) {
                 sessionStorage.removeItem(`cache_soal_${dataSiswa.id_paket}`);
             }

@@ -383,7 +383,6 @@
                 const now = audioCtx.currentTime;
 
                 if (tipe === 'sirine') {
-                    // Sirine naik-turun 2 siklus
                     for (let i = 0; i < 2; i++) {
                         const start = now + i * 0.45;
                         const osc = audioCtx.createOscillator();
@@ -402,7 +401,6 @@
                         osc.stop(start + 0.43);
                     }
                 } else if (tipe === 'chime') {
-                    // Bel dua nada harmonis
                     [659.25, 523.25].forEach((freq, idx) => {
                         const start = now + idx * 0.28;
                         const osc = audioCtx.createOscillator();
@@ -419,7 +417,6 @@
                         osc.stop(start + 0.46);
                     });
                 } else if (tipe === 'pulse') {
-                    // 5 pulsa cepat frekuensi tinggi
                     for (let i = 0; i < 5; i++) {
                         const start = now + i * 0.14;
                         const osc = audioCtx.createOscillator();
@@ -436,7 +433,6 @@
                         osc.stop(start + 0.11);
                     }
                 } else {
-                    // Beep Cepat 3x
                     for (let i = 0; i < 3; i++) {
                         const start = now + i * 0.24;
                         const osc = audioCtx.createOscillator();
@@ -650,7 +646,6 @@
             const tbody = document.getElementById('tabel-monitor-body');
             const tbodyPelanggaran = document.getElementById('tabel-pelanggaran-body');
 
-            // 1. AMBIL DATA LOG PELANGGARAN TERLEBIH DAHULU AGAR HITUNGAN PER SISWA AKURAT
             let queryPelanggaran = db.from('log_pelanggaran').select('*').order('created_at', { ascending: false }).limit(100);
             if (idSesi && idSesi !== 'semua') {
                 queryPelanggaran = queryPelanggaran.eq('id_sesi', idSesi);
@@ -659,12 +654,10 @@
             }
             const { data: dataPelanggaran, error: errPelanggaran } = await queryPelanggaran;
 
-            // Hitung jumlah pelanggaran per siswa (berdasarkan id_siswa + id_sesi, atau nama_siswa + id_sesi)
             const hitungPelanggaranMap = {};
-            const urutanPelanggaranRow = {}; // Menyimpan nomor urut ke-berapa pada tiap baris log
+            const urutanPelanggaranRow = {};
 
             if (!errPelanggaran && dataPelanggaran && dataPelanggaran.length > 0) {
-                // Urutkan sementara dari paling lama ke paling baru untuk menghitung urutan 1, 2, 3...
                 const kronologis = [...dataPelanggaran].reverse();
                 kronologis.forEach(item => {
                     const kunciSiswa = `${item.id_sesi || ''}_${item.id_siswa || item.nama_siswa || ''}`;
@@ -672,10 +665,8 @@
                     urutanPelanggaranRow[item.id] = hitungPelanggaranMap[kunciSiswa];
                 });
 
-                // Cek apakah ada pelanggaran baru sejak pengecekan terakhir
                 const terbaru = dataPelanggaran[0];
                 if (idLogTerakhirTerpantau === null) {
-                    // Kunjungan pertama kali: simpan ID terbaru tanpa membunyikan alarm lama
                     idLogTerakhirTerpantau = terbaru.id;
                 } else if (terbaru.id !== idLogTerakhirTerpantau) {
                     idLogTerakhirTerpantau = terbaru.id;
@@ -693,7 +684,6 @@
                 if (idLogTerakhirTerpantau === null) idLogTerakhirTerpantau = 'kosong';
             }
 
-            // 2. AMBIL DATA LOG UJIAN SISWA
             let queryLog = db.from('log_ujian').select('*').order('waktu_mulai', { ascending: false });
             if (idSesi && idSesi !== 'semua') {
                 queryLog = queryLog.eq('id_sesi', idSesi);
@@ -734,7 +724,6 @@
                         badgeStatus = `<span class="bg-green-100 text-green-700 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase animate-pulse">Mengerjakan</span>`;
                     }
 
-                    // Hitung rasio pelanggaran siswa terhadap batasMaks (dinamis mengikuti pengaturan_sistem)
                     const kunciLog = `${log.id_sesi || ''}_${log.id_siswa || log.nama_siswa || ''}`;
                     const jmlLanggar = hitungPelanggaranMap[kunciLog] || 0;
                     let badgeLanggar = '';
@@ -758,22 +747,27 @@
                                     ${badgeLanggar}
                                 </div>
                             </td>
-                            <td class="px-4 py-3 text-right space-x-1 no-print">
+                            <td class="px-4 py-3 text-right no-print">
                                 ${bolehKontrol ? `
-                                    <button onclick="resetUjianSiswa('${log.id}', '${log.id_peserta || ''}', '${log.id_siswa || ''}', '${log.id_sesi || ''}', '${namaSafe}')" class="bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1 rounded text-[11px] font-bold transition-colors inline-flex items-center gap-1 cursor-pointer" title="Izinkan Siswa Melanjutkan Ujian">
-                                        <i class="fa-solid fa-rotate-left"></i>
-                                        <span>Izinkan Lanjut</span>
-                                    </button>
-                                    <button onclick="blokirSiswa('${log.id}', '${log.id_peserta || ''}', '${log.id_siswa || ''}', '${log.id_sesi || ''}', '${namaSafe}')" class="bg-red-50 hover:bg-red-100 text-red-700 px-2 py-1 rounded text-[11px] font-bold transition-colors cursor-pointer" title="Kunci / Blokir Paksa">
-                                        <i class="fa-solid fa-ban"></i>
-                                    </button>` : '<span class="text-[11px] text-gray-400">Pantau saja</span>'}
+                                    <div class="inline-flex items-center justify-end gap-1 flex-wrap">
+                                        <button onclick="resetUjianSiswa('${log.id}', '${log.id_peserta || ''}', '${log.id_siswa || ''}', '${log.id_sesi || ''}', '${namaSafe}')" class="bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded text-[11px] font-bold transition-colors inline-flex items-center gap-1 cursor-pointer" title="Izinkan Siswa Melanjutkan Ujian">
+                                            <i class="fa-solid fa-rotate-left"></i>
+                                            <span>Lanjut</span>
+                                        </button>
+                                        <button onclick="paksaSelesaiSiswa('${log.id}', '${log.id_peserta || ''}', '${log.id_siswa || ''}', '${log.id_sesi || ''}', '${namaSafe}')" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-[11px] font-bold transition-colors inline-flex items-center gap-1 cursor-pointer" title="Paksa Selesai & Masukkan ke Leger Nilai">
+                                            <i class="fa-solid fa-circle-check"></i>
+                                            <span>Selesai</span>
+                                        </button>
+                                        <button onclick="blokirSiswa('${log.id}', '${log.id_peserta || ''}', '${log.id_siswa || ''}', '${log.id_sesi || ''}', '${namaSafe}')" class="bg-red-50 hover:bg-red-100 text-red-700 px-2 py-1 rounded text-[11px] font-bold transition-colors cursor-pointer" title="Kunci / Blokir Paksa">
+                                            <i class="fa-solid fa-ban"></i>
+                                        </button>
+                                    </div>` : '<span class="text-[11px] text-gray-400">Pantau saja</span>'}
                             </td>
                         </tr>
                     `;
                 });
             }
 
-            // 3. RENDER TABEL LOG PELANGGARAN
             if (errPelanggaran || !dataPelanggaran || dataPelanggaran.length === 0) {
                 tbodyPelanggaran.innerHTML = `<tr><td colspan="4" class="py-8 text-center text-gray-400 italic">Belum ada pelanggaran terdeteksi.</td></tr>`;
                 document.getElementById('stat-pelanggaran').innerText = "0";
@@ -854,7 +848,39 @@
             }
         }
 
-        // 2. KUNCI / BLOKIR PAKSA
+        // 2. PAKSA SELESAI & KUNCI JAWABAN KE LEGER NILAI
+        async function paksaSelesaiSiswa(logId, pesertaId, siswaId, sesiId, namaSiswa) {
+            if (!ROLE_KONTROL_PROKTOR.includes((currentUser.role || '').toLowerCase())) return;
+            if (!confirm(`Selesaikan paksa ujian ${namaSiswa}?\n\n• Siswa tidak dapat melanjutkan ujian lagi.\n• Jawaban yang sudah masuk akan langsung dihitung menjadi nilai di menu Penilaian & Hasil.`)) return;
+
+            const { error: errLog } = await db.from('log_ujian').update({
+                status: 'selesai'
+            }).eq('id', logId);
+
+            const waktuSekarang = new Date().toISOString();
+            if (pesertaId) {
+                await db.from('peserta_ujian').update({
+                    status_pengerjaan: 'selesai',
+                    finished_reason: 'dipaksa_selesai',
+                    submitted_at: waktuSekarang
+                }).eq('id', pesertaId);
+            } else if (siswaId && sesiId) {
+                await db.from('peserta_ujian').update({
+                    status_pengerjaan: 'selesai',
+                    finished_reason: 'dipaksa_selesai',
+                    submitted_at: waktuSekarang
+                }).eq('id_siswa', siswaId).eq('id_sesi', sesiId);
+            }
+
+            if (!errLog) {
+                alert(`✅ Ujian ${namaSiswa} telah ditetapkan SELESAI. Nilainya sudah tersedia di menu Penilaian & Hasil.`);
+                muatDataMonitoring();
+            } else {
+                alert("Gagal menyelesaikan ujian siswa: " + errLog.message);
+            }
+        }
+
+        // 3. KUNCI / BLOKIR PAKSA
         async function blokirSiswa(logId, pesertaId, siswaId, sesiId, namaSiswa) {
             if (!ROLE_KONTROL_PROKTOR.includes((currentUser.role || '').toLowerCase())) return;
             if (confirm(`PERHATIAN: Yakin ingin mengunci dan menghentikan paksa ujian ${namaSiswa}?`)) {
@@ -884,7 +910,7 @@
             }
         }
 
-        // 3. KIRIM PERINGATAN
+        // 4. KIRIM PERINGATAN
         async function kirimPeringatanSiswa(logId, namaSiswa) {
             const pesan = prompt(`Kirim pesan peringatan ke layar ${namaSiswa}:`, "Mohon tetap fokus pada ujian Anda!");
             if (pesan) {
@@ -892,12 +918,10 @@
             }
         }
 
-        // CETAK LAPORAN
         function cetakRekapMonitoring() {
             window.print();
         }
 
-        // ARSIP CSV (KHUSUS REKAP PELANGGARAN)
         async function arsipDataPelanggaran() {
             const idSesi = document.getElementById('pilih-sesi-monitor').value;
             let query = db.from('log_pelanggaran').select('*').order('created_at', { ascending: false });
@@ -942,9 +966,14 @@
                 const { error } = await db.from('log_ujian')
                     .update({ status: 'selesai' })
                     .eq('id_sesi', idSesi)
-                    .eq('status', 'mengerjakan');
+                    .in('status', ['mengerjakan', 'terkunci', 'diblokir']);
                 
                 if (!error) {
+                    await db.from('peserta_ujian')
+                        .update({ status_pengerjaan: 'selesai', finished_reason: 'diakhiri_masal', submitted_at: new Date().toISOString() })
+                        .eq('id_sesi', idSesi)
+                        .in('status_pengerjaan', ['aktif', 'mengerjakan', 'terkunci', 'diblokir']);
+
                     alert("Seluruh peserta pada sesi ini berhasil dihentikan paksa. Nilai sudah bisa dikalkulasi.");
                     muatDataMonitoring(); 
                 } else {
